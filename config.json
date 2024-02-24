@@ -1,0 +1,6 @@
+{
+    "path": {
+        "data": "/mnt/e/geographic_data/wri_aqueduct_floods_hazard/archive",
+        "output": "{project}/output"
+    }
+}
