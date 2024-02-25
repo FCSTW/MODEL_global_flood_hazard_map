@@ -2,13 +2,16 @@ import numpy as np
 import os
 import itertools as it
 import rasterio
+from . import analysis_process
 from .. import environment as env
 
 env.init()
 
-class Dataset:
+class ReturnPeriodAnalysis(analysis_process.AnalysisProcess):
 
     def __init__(self):
+
+        super().__init__()
 
         # ================================================================================
         #
@@ -16,29 +19,16 @@ class Dataset:
         #
         # ================================================================================
         
-        # Attributes for the file reading
-        self.list_flood_type       = ['inuncoast', 'inunriver']
-        self.list_climate_scenario = ['historical', 'rcp4p5', 'rcp8p5']
-        self.list_subsidence       = ['nosub', 'wtsub']
-        self.list_model            = ['000000000WATCH', '00000NorESM1-M', '0000GFDL_ESM2M', '0000HadGEM2-ES', '00IPSL-CM5A-LR', 'MIROC-ESM-CHEM']
-        self.list_year             = ['hist', '2030', '2050', '2080']
-        self.list_returnperiod     = ['rp0002', 'rp0005', 'rp0010', 'rp0025', 'rp0050', 'rp0100', 'rp0250', 'rp0500', 'rp1000']
-        #self.list_returnperiod     = ['rp0002', 'rp0005', 'rp0010', 'rp0025', 'rp0050', 'rp0100']
-        self.list_projection       = ['0', '0_perc_05', '0_perc_50']
-
-        # Attributes for the analysis
-        self.flooding_depth_threshold = 0.1
-
         # Read the reference raster file and update the attributes
         self.read_reference_raster_file()
 
         # ================================================================================
         #
-        # Call the methods to read the raster files
+        # Call the methods to calculate the exceedance probability
         #
         # ================================================================================
 
-        self.read_raster_file()
+        self.calc_exceedance_probability()
 
         return
     
@@ -72,10 +62,10 @@ class Dataset:
 
         return
     
-    def read_raster_file(self) -> None:
+    def calc_exceedance_probability(self) -> None:
 
         """
-        This method reads the raster files and performs the preprocessing procedures.
+        This method reads the raster files and calculates the exceedance probability.
         ================================================================================
 
         Arguments:
@@ -89,39 +79,52 @@ class Dataset:
 
         # ================================================================================
         #
-        # Initialization
-        #
-        # ================================================================================
-
-        # Set the template of the file name
-        template_filename_inuncoast = r'inuncoast_{climatescenario}_{subsidence}_{year}_{returnperiod}_{projection}.tif'
-        template_filename_inunriver = r'inunriver_{climatescenario}_{model}_{year}_{returnperiod}.tif'
-
-        # ================================================================================
-        #
         # Read the raster files
         #
         # ================================================================================
 
         # Read inuncoast files
-        # Loop over climate scenarios, subsidence, years, return periods, and projections
+        # Loop over climate scenarios, years, subsidence, and projections
 
         for climate_scenario, year in it.product(self.list_climate_scenario, self.list_year):
             
+            # ================================================================================
+            #
             # Skip the loop if the combination of climate scenario and year is not valid
+            #
+            # ================================================================================
+
             if ((climate_scenario == 'historical') and (year != 'hist')) or ((climate_scenario != 'historical') and (year == 'hist')):
                 
                 continue
 
             for subsidence, projection in it.product(self.list_subsidence, self.list_projection):
                 
+                # ================================================================================
+                #
+                # Skip the loop if the combination of climate scenario and project is not valid
+                #
+                # ================================================================================
+                    
+                if ((climate_scenario == 'historical') and (projection != '0')):
+                    
+                    continue
+
+                # ================================================================================
+                #
+                # Read the raster files and output the results
+                #
+                # ================================================================================
+                
+                # Print message
+                print(f'Reading the raster files of inuncoast: {climate_scenario}, {year}, {subsidence}, {projection}')
+
                 # Set the output file
-                output_file_flooding_rp_idx = f'flooding_rp_idx.{climate_scenario}.{subsidence}.{year}.{projection}.tif'
+                output_file_flooding_rp_idx = f'flooding_rp_idx.inuncoast.{climate_scenario}.{subsidence}.{year}.{projection}.tif'
 
                 # Check if the output file exists
-                if (os.path.isfile(os.path.join(env.CONFIG['path']['output'], output_file_flooding_rp_idx))):
+                if (os.path.isfile(os.path.join(env.CONFIG['path']['output'], 'flooding_rp_idx_rawdata', output_file_flooding_rp_idx))):
                     
-                    print('a')
                     continue
                 
                 # Create a array to store the raster data
@@ -136,7 +139,7 @@ class Dataset:
                 for return_period in self.list_returnperiod:
 
                     # Set the file name
-                    source_file_name = template_filename_inuncoast.format(
+                    source_file_name = 'inuncoast_{climatescenario}_{subsidence}_{year}_{returnperiod}_{projection}.tif'.format(
                         climatescenario=climate_scenario,
                         subsidence=subsidence,
                         year=year,
@@ -158,6 +161,101 @@ class Dataset:
                     # Update the raster data
                     raster_data_multi_rp[self.list_returnperiod.index(return_period), ...] = raster_array.squeeze()
                 
+                # Calculate the dummy of the flooding
+                flooding_rp_idx = self._calc_flooding_stats(raster_data_multi_rp)
+                
+                # ================================================================================
+                #
+                # Output the raster file
+                #
+                # ================================================================================
+
+                # Output the raster file
+                self._output_raster_file(
+                    output_file_flooding_rp_idx,
+                    flooding_rp_idx,
+                    'flooding_rp_idx',
+                    self.ref_crs,
+                    self.ref_transform,
+                )
+
+        # Read inunriver files
+        # Loop over climate scenarios, years and GCMs
+        
+        for climate_scenario, year in it.product(self.list_climate_scenario, self.list_year):
+            
+            # ================================================================================
+            #
+            # Skip the loop if the combination of climate scenario and year is not valid
+            #
+            # ================================================================================
+
+            if ((climate_scenario == 'historical') and (year != 'hist')) or ((climate_scenario != 'historical') and (year == 'hist')):
+                
+                continue
+
+            for model in self.list_model:
+
+                # ================================================================================
+                #
+                # Skip the loop if the combination of climate scenario and model is not valid
+                #
+                # ================================================================================
+                    
+                if ((climate_scenario == 'historical') and (model != '000000000WATCH')) or ((climate_scenario != 'historical') and (model == '000000000WATCH')):
+                    
+                    continue
+
+                # ================================================================================
+                #
+                # Read the raster files and output the results
+                #
+                # ================================================================================
+                
+                # Print message
+                print(f'Reading the raster files of inunriver: {climate_scenario}, {year}, {model}')
+
+                # Set the output file
+                output_file_flooding_rp_idx = f'flooding_rp_idx.inunriver.{climate_scenario}.{model}.{year}.tif'
+
+                # Check if the output file exists
+                if (os.path.isfile(os.path.join(env.CONFIG['path']['output'], 'flooding_rp_idx_rawdata', output_file_flooding_rp_idx))):
+                    
+                    continue
+                
+                # Create a array to store the raster data
+                raster_data_multi_rp = np.full((len(self.list_returnperiod), self.ref_shape[0], self.ref_shape[1]), np.nan, dtype=np.int8)
+
+                # ================================================================================
+                #
+                # Read the raster files of different return periods
+                #
+                # ================================================================================
+
+                for return_period in self.list_returnperiod:
+
+                    # Set the file name
+                    source_file_name = 'inunriver_{climatescenario}_{model}_{year}_{returnperiod}.tif'.format(
+                        climatescenario=climate_scenario,
+                        year=year,
+                        returnperiod=return_period,
+                        model=model,
+                    )
+
+                    # Read the raster file
+                    raster_array, _, _ = self._read_raster_data(source_file_name)
+
+                    # Check if the file exists
+                    if (raster_array is None):
+
+                        continue
+
+                    # Print message
+                    print(f'Reading the file {source_file_name}')
+
+                    # Aggregate the model outputs and update the raster data
+                    raster_data_multi_rp[self.list_returnperiod.index(return_period), ...] = raster_array.squeeze()
+            
                 # Calculate the dummy of the flooding
                 flooding_rp_idx = self._calc_flooding_stats(raster_data_multi_rp)
                 
@@ -210,6 +308,8 @@ class Dataset:
 
         # Check if the file exists
         if not (os.path.isfile(os.path.join(env.CONFIG['path']['data'], source_file_name))):
+
+            print(f'The file {source_file_name} does not exist.')
             
             return None, None, None
 
@@ -264,14 +364,16 @@ class Dataset:
         # Print message
         print(f'Outputting the file {output_file_name}')
 
-        # Create the output directory if it does not exist
-        if not os.path.exists(env.CONFIG['path']['output']):
+        output_path = os.path.join(env.CONFIG['path']['output'], 'flooding_rp_idx_rawdata')
 
-            os.makedirs(env.CONFIG['path']['output'], exist_ok=True)
+        # Create the output directory if it does not exist
+        if not os.path.exists(output_path):
+
+            os.makedirs(output_path, exist_ok=True)
 
         # Output the raster file
         with rasterio.open(
-            os.path.join(env.CONFIG['path']['output'], output_file_name),
+            os.path.join(output_path, output_file_name),
             'w',
             driver='GTiff',
             height=raster_array.shape[0],
@@ -320,30 +422,3 @@ class Dataset:
 
         #return flooding_dummy, flooding_rp_idx
         return flooding_rp_idx
-    
-    def _aggregate_model(self, stats: str='median'):
-
-        """
-        This method aggregates the model outputs by specific statistics.
-        ================================================================================
-
-        Arguments:
-
-            stats (str): The statistics to be used for aggregation. The options are:
-
-                - 'median': The median value of the model outputs.
-
-                - 'mean': The mean value of the model outputs.
-
-                - 'max': The maximum value of the model outputs.
-
-                - 'min': The minimum value of the model outputs.
-
-                - 'quantile_XX': The XXth quantile of the model outputs.
-
-        Returns:
-
-            None
-        """
-
-        return
